@@ -1,0 +1,59 @@
+name: Daily Activity Log
+
+# Runs 4 times a day (times are UTC). Each run makes 1 commit, but the
+# last slot only commits ~50% of the time, so you get 3-4 commits per day.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+    - cron: "43 9 * * *"
+    - cron: "11 14 * * *"
+    - cron: "37 19 * * *"   # "maybe" slot (50% chance)
+  workflow_dispatch:         # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-commits
+  cancel-in-progress: false
+
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Make a commit
+        env:
+          # Your GitHub "noreply" address. Commits must use an email linked to
+          # your account, otherwise they won't turn your graph green.
+          GIT_NAME: ${{ github.repository_owner }}
+          GIT_EMAIL: ${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com
+          MAYBE_SLOT: ${{ github.event.schedule == '37 19 * * *' }}
+        run: |
+          # Skip the optional slot half the time so the pattern looks natural
+          if [ "$MAYBE_SLOT" = "true" ] && [ $((RANDOM % 2)) -eq 0 ]; then
+            echo "Skipping optional slot today."
+            exit 0
+          fi
+
+          # Random delay (0-20 min) so commit times aren't identical every day
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            sleep $((RANDOM % 1200))
+          fi
+
+          git config user.name  "$GIT_NAME"
+          git config user.email "$GIT_EMAIL"
+
+          mkdir -p logs
+          echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') - daily update" >> logs/activity.log
+          git add logs/activity.log
+          git commit -m "Update activity log $(date -u '+%Y-%m-%d %H:%M')"
+
+          # Retry push in case another run pushed first
+          for i in 1 2 3; do
+            git pull --rebase && git push && break
+            sleep 10
+          done
